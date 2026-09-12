@@ -83,6 +83,7 @@ pub struct Config {
     pub blur: Blur,
     pub gestures: Gestures,
     pub overview: Overview,
+    pub magnifier: Magnifier,
     pub environment: Environment,
     pub xwayland_satellite: XwaylandSatellite,
     pub window_rules: Vec<WindowRule>,
@@ -200,6 +201,7 @@ where
                 "blur" => m_merge!(blur),
                 "gestures" => m_merge!(gestures),
                 "overview" => m_merge!(overview),
+                "magnifier" => m_merge!(magnifier),
                 "xwayland-satellite" => m_merge!(xwayland_satellite),
                 "switch-events" => m_merge!(switch_events),
                 "debug" => m_merge!(debug),
@@ -1724,6 +1726,9 @@ mod tests {
                         a: 0.3137255,
                     },
                 },
+            },
+            magnifier: Magnifier {
+                zoom: 2.0,
             },
             environment: Environment(
                 [

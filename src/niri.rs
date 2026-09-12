@@ -155,6 +155,7 @@ use crate::protocols::screencopy::{Screencopy, ScreencopyBuffer, ScreencopyManag
 use crate::protocols::virtual_pointer::VirtualPointerManagerState;
 use crate::render_helpers::blur::BlurOptions;
 use crate::render_helpers::debug::push_opaque_regions;
+use crate::render_helpers::magnifier::MagnifierElement;
 use crate::render_helpers::primary_gpu_texture::PrimaryGpuTextureRenderElement;
 use crate::render_helpers::renderer::NiriRenderer;
 use crate::render_helpers::solid_color::{SolidColorBuffer, SolidColorRenderElement};
@@ -401,6 +402,10 @@ pub struct Niri {
 
     pub debug_draw_opaque_regions: bool,
     pub debug_draw_damage: bool,
+
+    pub magnifier: crate::render_helpers::magnifier::Magnifier,
+    pub magnifier_active: bool,
+    pub magnifier_zoom: f64,
 
     #[cfg(feature = "dbus")]
     pub dbus: Option<crate::dbus::DBusServers>,
@@ -2508,6 +2513,7 @@ impl Niri {
             )
             .unwrap();
 
+        let magnifier_zoom = config_.magnifier.zoom;
         drop(config_);
         let mut niri = Self {
             config,
@@ -2637,6 +2643,10 @@ impl Niri {
 
             debug_draw_opaque_regions: false,
             debug_draw_damage: false,
+
+            magnifier: crate::render_helpers::magnifier::Magnifier::new(),
+            magnifier_active: false,
+            magnifier_zoom,
 
             #[cfg(feature = "dbus")]
             dbus: None,
@@ -4087,6 +4097,13 @@ impl Niri {
         self.screenshot_ui.advance_animations();
         self.window_mru_ui.advance_animations();
 
+        if self.magnifier_active {
+            // Force a fresh capture every frame while the magnifier is active: the cursor
+            // can move and the scene behind it can change between frames, both of which
+            // invalidate the captured crop just as much as a zoom change would.
+            self.magnifier.damage();
+        }
+
         for state in self.output_state.values_mut() {
             if let Some(transition) = &mut state.screen_transition {
                 if transition.is_done() {
@@ -4236,6 +4253,29 @@ impl Niri {
         } else {
             push
         };
+
+        // The magnifier, if active, goes above literally everything, including the pointer:
+        // it needs to be the very first thing pushed so that its capture_framebuffer() call
+        // (which grabs whatever the renderer already drew this frame) runs dead last, after
+        // every other element below has actually been drawn to the real framebuffer. Pushing
+        // elements is front-to-back (see "The pointer goes on the top" below, which pushes
+        // first to end up on top), and the renderer draws back-to-front, so "pushed first" is
+        // "drawn last" is "on top".
+        if self.magnifier_active {
+            if let Some(output_geo) = self.global_space.output_geometry(output) {
+                let pointer_pos = self
+                    .tablet_cursor_location
+                    .unwrap_or_else(|| self.seat.get_pointer().unwrap().current_location());
+                let pointer_pos =
+                    (pointer_pos - output_geo.loc.to_f64()).to_physical_precise_round(output_scale);
+
+                let geometry = Rectangle::from_size(output_geo.size.to_f64());
+                let elem = self
+                    .magnifier
+                    .render(geometry, pointer_pos, self.magnifier_zoom);
+                push(elem.into());
+            }
+        }
 
         // The pointer goes on the top.
         if include_pointer && self.pointer_visibility.is_visible() {
@@ -6560,5 +6600,6 @@ niri_render_elements! {
         Texture = PrimaryGpuTextureRenderElement,
         // Used for the CPU-rendered panels.
         RelocatedMemoryBuffer = RelocateRenderElement<MemoryRenderBufferRenderElement<R>>,
+        Magnifier = MagnifierElement,
     }
 }

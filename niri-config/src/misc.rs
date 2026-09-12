@@ -152,6 +152,29 @@ impl MergeWith<OverviewPart> for Overview {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Magnifier {
+    pub zoom: f64,
+}
+
+impl Default for Magnifier {
+    fn default() -> Self {
+        Self { zoom: 2. }
+    }
+}
+
+#[derive(knuffel::Decode, Debug, Clone, Copy, PartialEq)]
+pub struct MagnifierPart {
+    #[knuffel(child, unwrap(argument))]
+    pub zoom: Option<FloatOrInt<1, 10>>,
+}
+
+impl MergeWith<MagnifierPart> for Magnifier {
+    fn merge_with(&mut self, part: &MagnifierPart) {
+        merge!((self, part), zoom);
+    }
+}
+
 #[derive(knuffel::Decode, Debug, Default, Clone, PartialEq, Eq)]
 pub struct Environment(#[knuffel(children)] pub Vec<EnvironmentVariable>);
 

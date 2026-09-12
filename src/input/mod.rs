@@ -2305,6 +2305,11 @@ impl State {
                     self.niri.queue_redraw_all();
                 }
             }
+            Action::ToggleMagnifier => {
+                self.niri.magnifier_active = !self.niri.magnifier_active;
+                self.niri.magnifier.damage();
+                self.niri.queue_redraw_all();
+            }
             Action::ToggleWindowUrgent(id) => {
                 let window = self
                     .niri
@@ -3150,6 +3155,7 @@ impl State {
             let modifiers = modifiers_from_state(mods);
             let should_handle = should_handle_in_overview
                 || is_mru_open
+                || self.niri.magnifier_active
                 || self.niri.mods_with_wheel_binds.contains(&modifiers);
             if should_handle {
                 let horizontal = horizontal_amount_v120.unwrap_or(0.);
@@ -3277,6 +3283,17 @@ impl State {
                             hotkey_overlay_title: None,
                         });
                         (bind_up, bind_down)
+                    } else if self.niri.magnifier_active && modifiers.is_empty() {
+                        // Plain scroll while the magnifier is open adjusts its zoom level
+                        // directly, rather than going through the bind system — this isn't a
+                        // navigation action, just a live numeric adjustment. Scroll up (ticks
+                        // < 0) zooms in, scroll down (ticks > 0) zooms out.
+                        const ZOOM_STEP: f64 = 0.25;
+                        self.niri.magnifier_zoom =
+                            (self.niri.magnifier_zoom - ticks as f64 * ZOOM_STEP).clamp(1., 10.);
+                        self.niri.magnifier.damage();
+                        self.niri.queue_redraw_all();
+                        (None, None)
                     } else {
                         let config = self.niri.config.borrow();
                         let bindings =
