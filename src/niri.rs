@@ -3739,15 +3739,33 @@ impl Niri {
         output: &Output,
         push: &mut dyn FnMut(PointerRenderElements<R>),
     ) {
+        self.render_pointer_at(renderer, output, None, push);
+    }
+
+    /// Like [`Self::render_pointer`], but if `pos_override` is given, draws the cursor at
+    /// that output-local logical position instead of the real pointer location.
+    ///
+    /// Used by the magnifier: it warps the framebuffer around the cursor, so the cursor
+    /// sprite (drawn separately, on top) needs the same warp applied to its position, or it
+    /// visually drifts away from the magnified content it's supposed to be pointing at.
+    pub fn render_pointer_at<R: NiriRenderer>(
+        &self,
+        renderer: &mut R,
+        output: &Output,
+        pos_override: Option<Point<f64, Logical>>,
+        push: &mut dyn FnMut(PointerRenderElements<R>),
+    ) {
         let _span = tracy_client::span!("Niri::render_pointer");
         let output_scale = output.current_scale();
         let output_pos = self.global_space.output_geometry(output).unwrap().loc;
 
         // Check whether we need to draw the tablet cursor or the regular cursor.
-        let pointer_pos = self
-            .tablet_cursor_location
-            .unwrap_or_else(|| self.seat.get_pointer().unwrap().current_location());
-        let pointer_pos = pointer_pos - output_pos.to_f64();
+        let pointer_pos = pos_override.unwrap_or_else(|| {
+            let pointer_pos = self
+                .tablet_cursor_location
+                .unwrap_or_else(|| self.seat.get_pointer().unwrap().current_location());
+            pointer_pos - output_pos.to_f64()
+        });
 
         // Get the render cursor to draw.
         let cursor_scale = output_scale.integer_scale();
@@ -4102,11 +4120,11 @@ impl Niri {
     /// Sets a new target zoom level for the magnifier, animating towards it from whatever the
     /// current (possibly still-animating) zoom level is.
     pub fn set_magnifier_zoom_target(&mut self, target: f64) {
-        let target = target.clamp(1., 10.);
+        let config = self.config.borrow();
+        let target = target.clamp(1., config.magnifier.max_zoom);
         self.magnifier_zoom_target = target;
 
         let current = self.magnifier_zoom_anim.value();
-        let config = self.config.borrow();
         self.magnifier_zoom_anim = Animation::new(
             self.clock.clone(),
             current,
@@ -4292,25 +4310,65 @@ impl Niri {
         // elements is front-to-back (see "The pointer goes on the top" below, which pushes
         // first to end up on top), and the renderer draws back-to-front, so "pushed first" is
         // "drawn last" is "on top".
+        let mut hide_pointer_for_magnifier = false;
+        let mut magnifier_pointer_pos = None;
+
         if self.magnifier_active {
             if let Some(output_geo) = self.global_space.output_geometry(output) {
+                let mag = self.config.borrow().magnifier;
+                hide_pointer_for_magnifier = mag.hide_mouse;
+
                 let pointer_pos = self
                     .tablet_cursor_location
                     .unwrap_or_else(|| self.seat.get_pointer().unwrap().current_location());
-                let pointer_pos =
-                    (pointer_pos - output_geo.loc.to_f64()).to_physical_precise_round(output_scale);
+                let pointer_pos_logical = pointer_pos - output_geo.loc.to_f64();
+                let pointer_pos: Point<i32, Physical> =
+                    pointer_pos_logical.to_physical_precise_round(output_scale);
 
-                let geometry = Rectangle::from_size(output_geo.size.to_f64());
-                let elem =
-                    self.magnifier
-                        .render(geometry, pointer_pos, self.magnifier_zoom_anim.value());
+                let output_size = output_geo.size.to_f64();
+
+                // A spring animation can overshoot its target, so clamp the rendered value in
+                // addition to the target itself: otherwise a bouncy magnifier-zoom spring
+                // could momentarily exceed the configured max-zoom.
+                let zoom = self.magnifier_zoom_anim.value().clamp(1., mag.max_zoom);
+
+                let geometry = Rectangle::from_size(output_size);
+
+                // The magnifier warps the framebuffer around the cursor (crops a small box
+                // centered on it, then scales that box up to fill `geometry`), so the cursor
+                // sprite, drawn separately below via `render_pointer_at`, needs the same warp
+                // applied to its position — otherwise it stays at its real screen location
+                // while the content it's pointing at moves out from under it. This mirrors
+                // the crop-rect math in magnifier.rs's capture_framebuffer exactly.
+                let dst: Rectangle<i32, Physical> =
+                    geometry.to_physical_precise_round(output_scale);
+                let output_size_phys: Size<i32, Physical> =
+                    output_size.to_physical_precise_round(output_scale);
+                let src_w = ((dst.size.w as f64) / zoom).round().max(1.) as i32;
+                let src_h = ((dst.size.h as f64) / zoom).round().max(1.) as i32;
+                let max_x = (output_size_phys.w - src_w).max(0);
+                let max_y = (output_size_phys.h - src_h).max(0);
+                let src_x = (pointer_pos.x - src_w / 2).clamp(0, max_x);
+                let src_y = (pointer_pos.y - src_h / 2).clamp(0, max_y);
+                let mapped_x = dst.loc.x as f64
+                    + (pointer_pos.x - src_x) as f64 / src_w as f64 * dst.size.w as f64;
+                let mapped_y = dst.loc.y as f64
+                    + (pointer_pos.y - src_y) as f64 / src_h as f64 * dst.size.h as f64;
+                magnifier_pointer_pos = Some(Point::from((
+                    mapped_x / output_scale.x,
+                    mapped_y / output_scale.y,
+                )));
+
+                let elem = self.magnifier.render(geometry, pointer_pos, zoom);
                 push(elem.into());
             }
         }
 
         // The pointer goes on the top.
-        if include_pointer && self.pointer_visibility.is_visible() {
-            self.render_pointer(ctx.renderer, output, &mut |elem| push(elem.into()));
+        if include_pointer && self.pointer_visibility.is_visible() && !hide_pointer_for_magnifier {
+            self.render_pointer_at(ctx.renderer, output, magnifier_pointer_pos, &mut |elem| {
+                push(elem.into())
+            });
         }
 
         // Next, the screen transition texture.

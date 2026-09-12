@@ -32,7 +32,8 @@ pub struct Magnifier {
 pub struct MagnifierElement {
     id: Id,
     commit: CommitCounter,
-    /// Whole-output geometry, in output-local logical coordinates.
+    /// This element's own draw destination, in output-local logical coordinates: always the
+    /// whole output.
     geometry: Rectangle<f64, Logical>,
     /// Cursor position, in output-local physical coordinates, at the time this element was
     /// built. Precomputed by the caller (which already has the output scale to hand) rather
@@ -130,12 +131,13 @@ impl RenderElement<GlesRenderer> for MagnifierElement {
             inner.intermediate = None;
 
             // The area of the framebuffer we actually want to sample: a small box centered
-            // on the cursor, sized so that blitting it up to the full output size gives the
-            // requested zoom factor. Clamp so it never reads outside the output (the cursor
-            // near an edge shifts the box instead of letting it go out of bounds).
+            // on the cursor, sized so that blitting it up to the destination (the whole
+            // output) gives the requested zoom factor. Clamp so it never reads outside the
+            // output (the cursor near an edge shifts the box instead of letting it go out of
+            // bounds).
             let zoom = self.zoom.max(1.);
-            let src_w = ((output_rect.size.w as f64) / zoom).round().max(1.) as i32;
-            let src_h = ((output_rect.size.h as f64) / zoom).round().max(1.) as i32;
+            let src_w = ((dst.size.w as f64) / zoom).round().max(1.) as i32;
+            let src_h = ((dst.size.h as f64) / zoom).round().max(1.) as i32;
             let max_x = (output_rect.size.w - src_w).max(0);
             let max_y = (output_rect.size.h - src_h).max(0);
             let src_x = (self.pointer_pos.x - src_w / 2).clamp(0, max_x);
@@ -234,7 +236,7 @@ impl RenderElement<GlesRenderer> for MagnifierElement {
         };
 
         // The intermediate texture was already captured at exactly `dst`'s size, so this is
-        // a plain 1:1 blit — no cropping or custom shader needed, unlike framebuffer_effect.rs.
+        // a plain 1:1 blit — no cropping needed, unlike framebuffer_effect.rs.
         frame.render_texture_from_to(
             texture,
             Rectangle::from_size(texture.size().to_f64()),

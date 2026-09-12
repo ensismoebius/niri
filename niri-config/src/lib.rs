@@ -1741,6 +1741,10 @@ mod tests {
             },
             magnifier: Magnifier {
                 zoom: 2.0,
+                max_zoom: 10.0,
+                zoom_speed: 0.25,
+                zoom_modifier: Mod,
+                hide_mouse: false,
             },
             environment: Environment(
                 [
