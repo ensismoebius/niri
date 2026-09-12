@@ -3289,9 +3289,8 @@ impl State {
                         // navigation action, just a live numeric adjustment. Scroll up (ticks
                         // < 0) zooms in, scroll down (ticks > 0) zooms out.
                         const ZOOM_STEP: f64 = 0.25;
-                        self.niri.magnifier_zoom =
-                            (self.niri.magnifier_zoom - ticks as f64 * ZOOM_STEP).clamp(1., 10.);
-                        self.niri.magnifier.damage();
+                        let target = self.niri.magnifier_zoom_target - ticks as f64 * ZOOM_STEP;
+                        self.niri.set_magnifier_zoom_target(target);
                         self.niri.queue_redraw_all();
                         (None, None)
                     } else {

@@ -116,7 +116,7 @@ use wayland_server::protocol::wl_output::WlOutput;
 
 #[cfg(feature = "dbus")]
 use crate::a11y::A11y;
-use crate::animation::Clock;
+use crate::animation::{Animation, Clock};
 use crate::backend::tty::SurfaceDmabufFeedback;
 use crate::backend::{Backend, Headless, RenderResult, Tty, Winit};
 use crate::cursor::{CursorManager, CursorTextureCache, RenderCursor, XCursor};
@@ -405,7 +405,10 @@ pub struct Niri {
 
     pub magnifier: crate::render_helpers::magnifier::Magnifier,
     pub magnifier_active: bool,
-    pub magnifier_zoom: f64,
+    /// Target zoom level, as set by the user (e.g. via scrolling).
+    pub magnifier_zoom_target: f64,
+    /// Animation driving the actual rendered zoom level towards `magnifier_zoom_target`.
+    pub magnifier_zoom_anim: Animation,
 
     #[cfg(feature = "dbus")]
     pub dbus: Option<crate::dbus::DBusServers>,
@@ -2513,7 +2516,14 @@ impl Niri {
             )
             .unwrap();
 
-        let magnifier_zoom = config_.magnifier.zoom;
+        let magnifier_zoom_target = config_.magnifier.zoom;
+        let magnifier_zoom_anim = Animation::new(
+            animation_clock.clone(),
+            magnifier_zoom_target,
+            magnifier_zoom_target,
+            0.,
+            config_.animations.magnifier_zoom.0,
+        );
         drop(config_);
         let mut niri = Self {
             config,
@@ -2646,7 +2656,8 @@ impl Niri {
 
             magnifier: crate::render_helpers::magnifier::Magnifier::new(),
             magnifier_active: false,
-            magnifier_zoom,
+            magnifier_zoom_target,
+            magnifier_zoom_anim,
 
             #[cfg(feature = "dbus")]
             dbus: None,
@@ -4088,6 +4099,26 @@ impl Niri {
         }
     }
 
+    /// Sets a new target zoom level for the magnifier, animating towards it from whatever the
+    /// current (possibly still-animating) zoom level is.
+    pub fn set_magnifier_zoom_target(&mut self, target: f64) {
+        let target = target.clamp(1., 10.);
+        self.magnifier_zoom_target = target;
+
+        let current = self.magnifier_zoom_anim.value();
+        let config = self.config.borrow();
+        self.magnifier_zoom_anim = Animation::new(
+            self.clock.clone(),
+            current,
+            target,
+            0.,
+            config.animations.magnifier_zoom.0,
+        );
+        drop(config);
+
+        self.magnifier.damage();
+    }
+
     pub fn advance_animations(&mut self) {
         let _span = tracy_client::span!("Niri::advance_animations");
 
@@ -4270,9 +4301,9 @@ impl Niri {
                     (pointer_pos - output_geo.loc.to_f64()).to_physical_precise_round(output_scale);
 
                 let geometry = Rectangle::from_size(output_geo.size.to_f64());
-                let elem = self
-                    .magnifier
-                    .render(geometry, pointer_pos, self.magnifier_zoom);
+                let elem =
+                    self.magnifier
+                        .render(geometry, pointer_pos, self.magnifier_zoom_anim.value());
                 push(elem.into());
             }
         }
@@ -4671,6 +4702,8 @@ impl Niri {
             state.unfinished_animations_remain |= self.screenshot_ui.are_animations_ongoing();
             state.unfinished_animations_remain |= self.window_mru_ui.are_animations_ongoing();
             state.unfinished_animations_remain |= state.screen_transition.is_some();
+            state.unfinished_animations_remain |=
+                self.magnifier_active && !self.magnifier_zoom_anim.is_clamped_done();
 
             // Also keep redrawing if the current cursor is animated.
             state.unfinished_animations_remain |= self

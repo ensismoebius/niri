@@ -1672,6 +1672,18 @@ mod tests {
                         ),
                     },
                 ),
+                magnifier_zoom: MagnifierZoomAnim(
+                    Animation {
+                        off: false,
+                        kind: Spring(
+                            SpringParams {
+                                damping_ratio: 1.0,
+                                stiffness: 800,
+                                epsilon: 0.0001,
+                            },
+                        ),
+                    },
+                ),
             },
             blur: Blur {
                 off: false,
